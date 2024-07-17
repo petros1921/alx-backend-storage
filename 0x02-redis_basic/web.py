@@ -1,38 +1,56 @@
 #!/usr/bin/env python3
-'''A module with tools for request caching and tracking.
-'''
-import redis
 import requests
+import redis
 from functools import wraps
-from typing import Callable
+import time
 
+# Initialize Redis client
+cache = redis.Redis(host='localhost', port=6379, db=0)
 
-redis_store = redis.Redis()
-'''The module-level Redis instance.
-'''
+def cache_page(func):
+    @wraps(func)
+    def wrapper(url):
+        # Check if the URL result is cached
+        cached_page = cache.get(f"cache:{url}")
+        if cached_page:
+            return cached_page.decode('utf-8')
 
+        # Fetch the page content
+        page_content = func(url)
 
-def data_cacher(method: Callable) -> Callable:
-    '''Caches the output of fetched data.
-    '''
-    @wraps(method)
-    def invoker(url) -> str:
-        '''The wrapper function for caching the output.
-        '''
-        redis_store.incr(f'count:{url}')
-        result = redis_store.get(f'result:{url}')
-        if result:
-            return result.decode('utf-8')
-        result = method(url)
-        redis_store.set(f'count:{url}', 0)
-        redis_store.setex(f'result:{url}', 10, result)
-        return result
-    return invoker
+        # Cache the result with an expiration time of 10 seconds
+        cache.setex(f"cache:{url}", 10, page_content)
 
+        return page_content
 
-@data_cacher
+    return wrapper
+
+def track_access(func):
+    @wraps(func)
+    def wrapper(url):
+        # Increment the access count for the URL
+        cache.incr(f"count:{url}")
+
+        return func(url)
+
+    return wrapper
+
+@track_access
+@cache_page
 def get_page(url: str) -> str:
-    '''Returns the content of a URL after caching the request's response,
-    and tracking the request.
-    '''
-    return requests.get(url).text
+    response = requests.get(url)
+    return response.text
+
+# Example Usage
+if __name__ == "__main__":
+    test_url = "http://slowwly.robertomurray.co.uk/delay/5000/url/http://www.google.co.uk"
+
+    # Fetch the page twice to see caching in action
+    print(get_page(test_url))
+    time.sleep(5)
+    print(get_page(test_url))
+    time.sleep(5)
+    print(get_page(test_url))
+
+    # Print access count
+    print(f"Access count for {test_url}: {cache.get(f'count:{test_url}').decode('utf-8')}")
